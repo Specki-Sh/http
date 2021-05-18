@@ -1,56 +1,100 @@
-package main
+package server
 
 import (
+	"bytes"
 	"log"
 	"net"
-	"os"
-	"strconv"
-
-	"github.com/ripol92/http/pkg/server"
+	"strings"
+	"sync"
 )
 
-const CRLF = "\r\n"
+type HandlerFunc func(conn net.Conn)
 
-func main() {
-	host := "0.0.0.0"
-	port := "9999"
-
-	if err := execute(host, port); err != nil {
-		os.Exit(1)
-	}
+type Server struct {
+	addr     string
+	mu       sync.RWMutex
+	handlers map[string]HandlerFunc
 }
 
-func execute(host string, port string) (err error) {
-	srv := server.NewServer(net.JoinHostPort(host, port))
-	srv.Register("/", func(conn net.Conn) {
-		body := "Welcome to our web-site"
+func NewServer(addr string) *Server {
+	return &Server{addr: addr, handlers: make(map[string]HandlerFunc)}
+}
 
-		_, err = conn.Write([]byte(
-			"HTTP/1.1 200 OK" + CRLF +
-				"Content-Length: " + strconv.Itoa(len(body)) + CRLF +
-				"Content-Type: text/html" + CRLF +
-				"Connection: close" + CRLF +
-				"\r\n" +
-				body,
-		))
+func (s *Server) Register(path string, handler HandlerFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.handlers[path] = handler
+}
+
+func (s *Server) Start() error {
+	listener, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		log.Print(err)
+		return err
+	}
+	defer func() {
+		if cerr := listener.Close(); cerr != nil {
+			if err == nil {
+				err = cerr
+				return
+			}
+			log.Print(cerr)
+		}
+	}()
+
+	for {
+		conn, err := listener.Accept()
 		if err != nil {
 			log.Print(err)
-		}
-	})
-	srv.Register("/about", func(conn net.Conn) {
-		body := "About Golang Academy"
+			return err
 
-		_, err = conn.Write([]byte(
-			"HTTP/1.1 200 OK" + CRLF +
-				"Content-Length: " + strconv.Itoa(len(body)) + CRLF +
-				"Content-Type: text/html" + CRLF +
-				"Connection: close" + CRLF +
-				"\r\n" +
-				body,
-		))
+		}
+
+		err = s.handle(conn)
 		if err != nil {
 			log.Print(err)
+			continue
 		}
-	})
-	return srv.Start()
+	}
+
+}
+
+func (s *Server) handle(conn net.Conn) (err error) {
+	defer func() {
+		if cerr := conn.Close(); cerr != nil {
+			if err == nil {
+				err = cerr
+				return
+			}
+			log.Print(err)
+		}
+	}()
+
+	buf := make([]byte, 4096)
+
+	n, err := conn.Read(buf)
+	data := buf[:n]
+	requestedLineDelim := []byte{'\r', '\n'}
+	requestedLineEnd := bytes.Index(data, requestedLineDelim)
+	if requestedLineEnd == -1 {
+		return err
+	}
+
+	requestLine := string(data[:requestedLineEnd])
+	parts := strings.Split(requestLine, " ")
+	if len(parts) != 3 {
+		return err
+	}
+
+	_, path, version := parts[0], parts[1], parts[2]
+
+	if version != "HTTP/1.1" {
+		return
+	}
+
+	if handler, exist := s.handlers[path]; exist {
+		handler(conn)
+	}
+
+	return nil
 }
