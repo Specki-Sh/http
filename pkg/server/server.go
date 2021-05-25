@@ -131,25 +131,12 @@ func (s *Server) handle(conn net.Conn) {
 
 		req.Conn = conn
 		req.QueryParams = uri.Query()
-		//   req.PathParams = uri.Path
-		//   log.Print(uri.Path)
-		//   log.Print(uri.Query())
 
 		var handler = func(req *Request) {
 			req.Conn.Close()
 		}
 		s.mu.RLock()
-		//   pathP, err :=s.checkPath(uri.Path)
-		//   if err!=nil {
-		// 	req.PathParams = pathP
-		//   }
 
-		//   for i := 0; i < len(s.handlers); i++ {
-		// 	if hr, found := s.handlers[uri.Path]; found {
-		// 	  handler = hr
-		// 	  break
-		// 	}
-		//   }
 		pathParam, hr := s.checkPath(uri.Path)
 		if hr != nil {
 			req.PathParams = pathParam

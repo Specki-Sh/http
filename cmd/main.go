@@ -1,67 +1,49 @@
 package main
 
 import (
-	"fmt"
-	"log"
 	"net"
+	"net/http"
 	"os"
-	"strconv"
+	"sync"
 
-	"github.com/Specki-Sh/http/pkg/server"
+	"github.com/Specki-Sh/http/cmd/app"
+	"github.com/Specki-Sh/http/pkg/banners"
 )
 
 func main() {
-	host := "localhost"
+	host := "0.0.0.0"
 	port := "9999"
 
 	if err := execute(host, port); err != nil {
 		os.Exit(1)
-
 	}
-	fmt.Println("server closed")
 }
 
 func execute(host string, port string) (err error) {
-	srv := server.NewServer(net.JoinHostPort(host, port))
-	srv.Register("/", func(req *server.Request) {
-		body := "Welcome to our web-site"
-		id := req.QueryParams["id"]
-		log.Print(id)
+	mux := http.NewServeMux()
+	bannersSvc := banners.NewService()
+	server := app.NewServer(mux, bannersSvc)
 
-		_, err = req.Conn.Write([]byte(
-			"HTTP/1.1 200 OK\r\n" +
-				"Content-Lenght: " + strconv.Itoa(len(body)) + "\r\n" +
-				"Content-Type: text/html\r\n" +
-				"Connection: close\r\n" +
-				"\r\n" +
-				body,
-		))
+	srv := &http.Server{
+		Addr:    net.JoinHostPort(host, port),
+		Handler: server,
+	}
 
-		if err != nil {
-			log.Print(err)
-		}
-	})
+	return srv.ListenAndServe()
+}
 
-	srv.Register("/payment/{id}", func(req *server.Request) {
-		id := req.PathParams["id"]
-		log.Print(id)
-	})
+type handler struct {
+	mu       *sync.RWMutex
+	handlers map[string]http.HandlerFunc
+}
 
-	srv.Register("/about", func(req *server.Request) {
-		body := "About Golang Academy"
-
-		_, err = req.Conn.Write([]byte(
-			"HTTP/1.1 200 OK\r\n" +
-				"Content-Lenght: " + strconv.Itoa(len(body)) + "\r\n" +
-				"Content-Type: text/html\r\n" +
-				"Connection: close\r\n" +
-				"\r\n" +
-				body,
-		))
-
-		if err != nil {
-			log.Print(err)
-		}
-	})
-	return srv.Start()
+func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	h.mu.RLock()
+	handler, ok := h.handlers[request.URL.Path]
+	h.mu.RUnlock()
+	if !ok {
+		http.Error(writer, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+	handler(writer, request)
 }
